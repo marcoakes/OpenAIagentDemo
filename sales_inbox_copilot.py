@@ -36,13 +36,17 @@ def simple_search(files: List[str], query: str, top_k: int = 3) -> List[Dict]:
     q_terms = [t.lower() for t in re.findall(r"\w+", query)]
     hits = []
     for path in files:
-        with open(path, "r", encoding="utf-8") as f:
-            txt = f.read()
-        score = sum(txt.lower().count(t) for t in q_terms)
-        if score > 0:
-            # return a short snippet
-            snippet = txt[:400].strip().replace("\n", " ")
-            hits.append({"path": path, "score": score, "snippet": snippet})
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                txt = f.read()
+            score = sum(txt.lower().count(t) for t in q_terms)
+            if score > 0:
+                # return a short snippet
+                snippet = txt[:400].strip().replace("\n", " ")
+                hits.append({"path": path, "score": score, "snippet": snippet})
+        except (IOError, OSError) as e:
+            print(f"Warning: Could not read file {path}: {e}")
+            continue
     return sorted(hits, key=lambda x: x["score"], reverse=True)[:top_k]
 
 
@@ -53,9 +57,17 @@ def simple_search(files: List[str], query: str, top_k: int = 3) -> List[Dict]:
     description_override="Search the local knowledge base for content answering the user's question.",
 )
 def search_kb(query: str, top_k: int = 3) -> Dict:
-    files = glob.glob(f"{KB_DIR}/*.md")
-    results = simple_search(files, query, top_k=top_k)
-    return {"results": results}
+    if not query or not query.strip():
+        return {"results": [], "error": "Query cannot be empty"}
+
+    try:
+        files = glob.glob(f"{KB_DIR}/*.md")
+        if not files:
+            return {"results": [], "error": "No knowledge base files found"}
+        results = simple_search(files, query, top_k=top_k)
+        return {"results": results}
+    except Exception as e:
+        return {"results": [], "error": f"Search failed: {str(e)}"}
 
 
 @function_tool(
@@ -123,29 +135,38 @@ agent = Agent(
 
 
 def demo_run():
-    session: Session = agent.new_session(metadata={"demo": "sales_inbox"})
-    user_msg = (
-        "Hi, we are evaluating your platform for a 120 person research team. "
-        "Do you support SSO with Okta and can we export results to CSV? "
-        "We need SOC 2 and ISO docs for security review."
-    )
-    print("\n--- Incoming message ---\n", user_msg)
+    try:
+        session: Session = agent.new_session(metadata={"demo": "sales_inbox"})
+        user_msg = (
+            "Hi, we are evaluating your platform for a 120 person research team. "
+            "Do you support SSO with Okta and can we export results to CSV? "
+            "We need SOC 2 and ISO docs for security review."
+        )
+        print("\n--- Incoming message ---\n", user_msg)
 
-    # Step 1: let the agent think and choose tools
-    r1 = session.run(user_msg)
-    print("\n--- Agent initial response ---\n", r1.output_text)
+        # Step 1: let the agent think and choose tools
+        r1 = session.run(user_msg)
+        print("\n--- Agent initial response ---\n", r1.output_text)
 
-    # For inspection, show tool call outputs the agent used
-    for call in r1.tool_calls:
-        print(f"\n[Tool called] {call.name}")
-        print(json.dumps(call.output, indent=2))
+        # For inspection, show tool call outputs the agent used
+        for call in r1.tool_calls:
+            print(f"\n[Tool called] {call.name}")
+            print(json.dumps(call.output, indent=2))
 
-    # Step 2: ask the agent for the final email
-    r2 = session.run("Please provide the final email reply only.")
-    print("\n--- Draft email ---\n", r2.output_text)
+        # Step 2: ask the agent for the final email
+        r2 = session.run("Please provide the final email reply only.")
+        print("\n--- Draft email ---\n", r2.output_text)
+    except Exception as e:
+        print(f"\nError running demo: {str(e)}")
+        print("Please ensure OPENAI_API_KEY is set in your environment.")
+        raise
 
 
 if __name__ == "__main__":
     # Requires OPENAI_API_KEY to be set in the environment
     # Example: export OPENAI_API_KEY=sk-...
+    if not os.getenv("OPENAI_API_KEY"):
+        print("Error: OPENAI_API_KEY environment variable is not set.")
+        print("Please set it with: export OPENAI_API_KEY=sk-...")
+        exit(1)
     demo_run()
